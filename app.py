@@ -98,7 +98,8 @@ def joined_view() -> pd.DataFrame:
 # -------------------------
 # Main layout
 # -------------------------
-tab1, tab2, tab3, tab4 = st.tabs(["📦 Column Families", "🔎 Buscar por Row Key", "🧩 Vista combinada", "🧹 Admin"])
+tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 Column Families", "🔎 Buscar por Row Key", "🧩 Vista combinada", "🧹 Admin", "🔭 Consulta"])
+
 
 with tab1:
     c1, c2, c3 = st.columns(3, gap="large")
@@ -158,5 +159,96 @@ with tab4:
         for fam in FAMILIES:
             st.session_state[fam] = {}
         st.success("Store reiniciado. Recarga o continúa insertando nuevos registros.")
+with tab5:
+    st.subheader("🔭 Consulta (lectura selectiva de columnas)")
+    st.caption("Simula el *column pruning* de Cassandra: leer solo las columnas necesarias reduce I/O y ancho de banda.")
+
+    # Unir el universo de columnas disponibles (con prefijos para evitar colisiones)
+    all_cols = []
+    for col in (set().union(*(CF_USER.values())) if CF_USER else set()):
+        all_cols.append(f"user_{col}")
+    for col in (set().union(*(CF_GEO.values())) if CF_GEO else set()):
+        all_cols.append(f"geo_{col}")
+    for col in (set().union(*(CF_MET.values())) if CF_MET else set()):
+        all_cols.append(f"met_{col}")
+
+    all_cols = sorted(set(all_cols))
+
+    if not all_cols:
+        st.info("Aún no hay columnas disponibles. Inserta registros primero.")
+    else:
+        selected_cols = st.multiselect(
+            "Selecciona las columnas que deseas leer",
+            options=all_cols,
+            default=all_cols[: min(5, len(all_cols))]
+        )
+
+        run = st.button("Ejecutar consulta")
+
+        if run:
+            start = time.perf_counter()
+
+            # Construir resultado solo con las columnas seleccionadas
+            keys = sorted(set(CF_USER.keys()) | set(CF_GEO.keys()) | set(CF_MET.keys()))
+            rows = []
+
+            for k in keys:
+                row = {"customer_id": k}
+
+                # user_*
+                if any(c.startswith("user_") for c in selected_cols):
+                    for c in selected_cols:
+                        if c.startswith("user_"):
+                            base = c.replace("user_", "", 1)
+                            if base in CF_USER.get(k, {}):
+                                row[c] = CF_USER[k][base]
+
+                # geo_*
+                if any(c.startswith("geo_") for c in selected_cols):
+                    for c in selected_cols:
+                        if c.startswith("geo_"):
+                            base = c.replace("geo_", "", 1)
+                            if base in CF_GEO.get(k, {}):
+                                row[c] = CF_GEO[k][base]
+
+                # met_*
+                if any(c.startswith("met_") for c in selected_cols):
+                    for c in selected_cols:
+                        if c.startswith("met_"):
+                            base = c.replace("met_", "", 1)
+                            if base in CF_MET.get(k, {}):
+                                row[c] = CF_MET[k][base]
+
+                rows.append(row)
+
+            df = pd.DataFrame(rows)
+
+            end = time.perf_counter()
+            elapsed_ms = (end - start) * 1000
+
+            # Calcular columnas totales disponibles (para simular "ignoradas")
+            # Universo real: columnas combinadas en vista join
+            join_df = joined_view()
+            # quitamos customer_id si está
+            total_available = max(0, len(join_df.columns) - (1 if "customer_id" in join_df.columns else 0))
+
+            selected_count = len(selected_cols)
+            ignored = max(0, total_available - selected_count)
+
+            st.metric("Tiempo de procesamiento (ms)", f"{elapsed_ms:.2f}")
+            st.info(f"Columnas ignoradas: **{ignored}** (simula ahorro de ancho de banda / I/O)")
+
+            # Mostrar resultado
+            if selected_cols:
+                # Reordenar columnas: customer_id primero
+                final_cols = ["customer_id"] + selected_cols
+                # Asegurar columnas existentes (por si no hay data para alguna)
+                for c in final_cols:
+                    if c not in df.columns:
+                        df[c] = None
+                st.dataframe(df[final_cols], use_container_width=True)
+            else:
+                st.warning("No seleccionaste columnas. Selecciona al menos una para ejecutar la consulta.")
+
 
 
