@@ -98,7 +98,15 @@ def joined_view() -> pd.DataFrame:
 # -------------------------
 # Main layout
 # -------------------------
-tab1, tab2, tab3, tab4, tab5 = st.tabs(["📦 Column Families", "🔎 Buscar por Row Key", "🧩 Vista combinada", "🧹 Admin", "🔭 Consulta"])
+tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
+    "📦 Column Families",
+    "🔎 Buscar por Row Key",
+    "🧩 Vista combinada",
+    "🧹 Admin",
+    "🔭 Consulta",
+    "📈 Analítica"
+])
+
 
 
 with tab1:
@@ -249,6 +257,47 @@ with tab5:
                 st.dataframe(df[final_cols], use_container_width=True)
             else:
                 st.warning("No seleccionaste columnas. Selecciona al menos una para ejecutar la consulta.")
+with tab6:
+    st.subheader("📈 Analítica: Gasto_Publicitario por Ciudad")
+    st.caption("Agregación tipo OLAP (didáctica) sobre columnas específicas.")
 
+    # Construir dataset mínimo SOLO con las 2 columnas implicadas:
+    # - Ciudad: geo_ciudad
+    # - Gasto_Publicitario: met_gasto_publicitario
+    keys = sorted(set(CF_GEO.keys()) | set(CF_MET.keys()))
 
+    rows = []
+    for k in keys:
+        ciudad = CF_GEO.get(k, {}).get("ciudad")
+        gasto_pub = CF_MET.get(k, {}).get("gasto_publicitario")
+
+        # Solo añadimos filas con ambas columnas disponibles
+        if ciudad is not None and gasto_pub is not None:
+            rows.append({"Ciudad": ciudad, "Gasto_Publicitario": float(gasto_pub)})
+
+    if not rows:
+        st.warning(
+            "No hay datos suficientes para esta analítica.\n\n"
+            "Asegúrate de insertar registros con:\n"
+            "- `Datos_Geograficos.ciudad`\n"
+            "- `Datos_Metricas.gasto_publicitario` (Gasto_Publicitario)\n"
+        )
+    else:
+        df = pd.DataFrame(rows)
+
+        # Agregación: SUM(Gasto_Publicitario) por Ciudad
+        agg = df.groupby("Ciudad", as_index=True)["Gasto_Publicitario"].sum().sort_values(ascending=False)
+
+        # Gráfico de barras (Streamlit)
+        st.bar_chart(agg)
+
+        st.markdown("**Tabla de soporte**")
+        st.dataframe(agg.reset_index(), use_container_width=True)
+
+        st.info(
+            "💡 **Por qué esto es ultra rápido en un sistema orientado a columnas (estilo Cassandra/wide-row):** "
+            "para calcular `SUM(Gasto_Publicitario) BY Ciudad`, el motor solo necesita **escanear esas dos columnas** "
+            "(`Ciudad` y `Gasto_Publicitario`). No necesita leer el resto de columnas/atributos del registro. "
+            "Ese *column pruning* reduce I/O y ancho de banda, acelerando mucho las agregaciones."
+        )
 
